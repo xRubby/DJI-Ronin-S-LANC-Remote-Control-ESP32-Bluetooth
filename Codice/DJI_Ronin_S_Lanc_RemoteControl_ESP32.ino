@@ -2,7 +2,6 @@
 #include <Bluepad32.h>
 #include "LANC_CAM_CONTROL.h"
 
-
 // --- Controller ---
 ControllerPtr myController = nullptr;
 
@@ -10,13 +9,14 @@ ControllerPtr myController = nullptr;
 Ronin_SBUS ronin;
 #define SBUS_PIN 14         // PIN ESP32
 
+// --- PIN LANC ---
+#define COMMAND_PIN 13      // Mando dati LANC
+#define LANC_PIN 12         // Leggo dati LANC
 
-// Définir les pins de commande et LANC
-#define COMMAND_PIN 13
-#define LANC_PIN 12
-
+// --- Interfaccia LANC ---
 LANC_CAM_CONTROL cameraControl(COMMAND_PIN, LANC_PIN);
 
+// --- Variabile per la gestione dello start/stop della registrazione ---
 bool prevAState = false;
 
 // --- Costanti S.BUS ---
@@ -25,7 +25,7 @@ const int sbusMIN = 352;    // Min usable for analog val and switch val
 const int sbusMAX = 1696;   // Max usable for analog val and switch val
 const int sbusWAIT = 10;    // Frame timing delay in msecs
 
-// --- Variabili per la gestione della modalità di movimento (veloce o lenta) ---
+// --- Variabili per la gestione della modalità di movimento del Ronin (veloce o lenta) ---
 bool lowspeed=false;
 bool prevBState = false;
 
@@ -73,10 +73,33 @@ int16_t mapToSbus(int16_t value) {
   return mapped;
 }
 
+// --- Funzione per la gestione della velocità di movimento del Ronin ---
 void changeSpeed(){
   lowspeed = !lowspeed;
 
   Serial.println("Velocità impostata su " + String(lowspeed));
+}
+
+void zoomCamera(int16_t value){
+  const int deadzone = 50;  // intervallo attorno allo zero considerato neutro
+
+  // Se siamo nella zona morta, esco senza fare nulla
+  if(abs(value) < deadzone) {
+    return;
+  }
+
+  int16_t speed;
+
+  // Mappa il valore del joystick alla velocità di zoom:
+  // - Se > 0: zoom out (da 0 a 500 → velocità 0–7)
+  // - Se < 0: zoom in  (da 0 a -500 → velocità 0–7)
+  if(value>0){
+    speed = map(value, 0, 500, 0, 7);
+    cameraControl.zoomOut(speed);
+  }else{
+    speed = map(value, 0, -500, 0, 7);
+    cameraControl.zoomIn(speed);
+  }
 }
 
 void setup() {
@@ -101,29 +124,33 @@ void loop() {
   // Se ci sono dati nuovi e il controller è connesso
   if(dataUpdated && myController != nullptr) {
     
-    //Se viene premuto il tasto B (A per Switch Pro Controller) la velocità viene dimezzata
+    //Se viene premuto il tasto B (A per Switch Pro Controller) la velocità del Ronin viene cambiata
     bool currentBState = myController->b();
 
     if (currentBState && !prevBState) {
       changeSpeed();
     }
 
-    // Aggiorna lo stato precedente del tasto
+    // Aggiorna lo stato precedente del tasto B (A per Switch Pro Controller)
     prevBState = currentBState;
 
-    //Se viene premuto il tasto A (B per Switch Pro Controller) la velocità viene dimezzata
+    //Se viene premuto il tasto A (B per Switch Pro Controller) 
+    //viene avviata/stoppata la registrazione sulla camera
     bool currentAState = myController->a();
 
     if (currentAState && !prevAState) {
       cameraControl.startStopRecording();
     }
 
-    // Aggiorna lo stato precedente del tasto
+    // Aggiorna lo stato precedente del tasto A (B per Switch Pro Controller) 
     prevAState = currentAState;
 
+    // Leggo il valore dell'asse Y del controller per controllare lo zoom della camera
+    zoomCamera(myController->axisY());
+
     // Leggi gli assi del controller e mappa su valori S.Bus
-    int16_t pan  = mapToSbus(myController->axisX());
-    int16_t tilt = mapToSbus(myController->axisY());
+    int16_t pan  = mapToSbus(myController->axisRX());
+    int16_t tilt = mapToSbus(myController->axisRY());
 
     // Aggiorna i canali Ronin
     ronin.SetValue(1, pan); // Canale 1 → Pan
